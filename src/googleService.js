@@ -141,7 +141,7 @@ class GoogleService {
     async checkAvailability(timeMin, timeMax) {
         try {
             const res = await this.calendar.events.list({
-                calendarId: 'primary',
+                calendarId: 'huyhoangnlp@gmail.com',
                 timeMin: timeMin,
                 timeMax: timeMax,
                 singleEvents: true,
@@ -173,7 +173,7 @@ class GoogleService {
                 end: { dateTime: endTime },
             };
             const res = await this.calendar.events.insert({
-                calendarId: 'primary',
+                calendarId: 'huyhoangnlp@gmail.com',
                 resource: event,
             });
             return `Đã đặt lịch thành công! Sự kiện: ${summary} (Link: ${res.data.htmlLink})`;
