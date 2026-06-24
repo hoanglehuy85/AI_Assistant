@@ -58,12 +58,12 @@ class AiService {
         }];
 
         let attempt = 0;
+        let currentModel = 'gemini-3.5-flash';
         
         while (attempt <= maxRetries) {
             try {
-                // Nâng cấp lên model gemini-3.5-flash mới nhất và thông minh nhất
                 const response = await this.ai.models.generateContent({
-                    model: 'gemini-3.5-flash',
+                    model: currentModel,
                     contents: contents,
                     config: {
                         systemInstruction: systemPrompt,
@@ -91,7 +91,7 @@ class AiService {
                     ];
                     
                     const finalResponse = await this.ai.models.generateContent({
-                        model: 'gemini-3.5-flash',
+                        model: currentModel,
                         contents: newContents,
                         config: {
                             systemInstruction: systemPrompt,
@@ -108,9 +108,16 @@ class AiService {
                 attempt++;
                 console.error(`AI Error (Attempt ${attempt}):`, error.message);
                 
-                // Quay vòng Key nếu hết Quota (429) hoặc Server Quá tải (503)
-                if (error.status === 429 || error.status === 503 || error.message.includes('429') || error.message.includes('503') || error.message.includes('quota')) {
-                    console.warn("API Quá tải hoặc hết Quota. Đang đổi API Key khác...");
+                // Nếu bị 503 (Server bận), tự động lùi về bản 1.5 ổn định hơn
+                if (error.status === 503 || error.message.includes('503')) {
+                    console.warn(`[AI] Server ${currentModel} quá tải (503). Đang hạ cấp xuống gemini-1.5-flash...`);
+                    currentModel = 'gemini-1.5-flash';
+                    continue;
+                }
+                
+                // Quay vòng Key nếu hết Quota (429)
+                if (error.status === 429 || error.message.includes('429') || error.message.includes('quota')) {
+                    console.warn("API hết Quota. Đang đổi API Key khác...");
                     const rotated = apiKeyManager.rotateKey();
                     
                     if (rotated) {
@@ -118,7 +125,7 @@ class AiService {
                         console.log("Đã đổi Key. Đang thử lại...");
                         continue; 
                     } else {
-                        return "Hệ thống AI hiện đang quá tải và không còn key dự phòng. Xin vui lòng thử lại sau.";
+                        return "Hệ thống AI hiện đang hết tài nguyên. Xin vui lòng thử lại sau.";
                     }
                 }
                 

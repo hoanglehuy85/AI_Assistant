@@ -139,8 +139,19 @@ app.post('/webhook', async (req, res) => {
                             
                             escalatedRequest = null; // Reset
                         } else {
-                            // Sếp tự nhắn
-                            await metaService.sendMessage(metaService.privatePageId, bossPrivatePsid, "Dạ em nghe Sếp ạ! Hiện tại không có khách nào chờ trả lời.");
+                            // Sếp tự nhắn (Chat trực tiếp với AI)
+                            const bossPrompt = `Bạn là trợ lý ảo cá nhân của Sếp. Xưng 'em' và gọi 'Sếp'. Nhiệm vụ của bạn là vâng lời Sếp, giúp Sếp tra cứu lịch rảnh, đặt lịch làm việc, hoặc trò chuyện vui vẻ.`;
+                            
+                            // Cập nhật Chat History cho Sếp (dùng chung chatHistory map với key là 'BOSS')
+                            if (!chatHistory.has('BOSS')) chatHistory.set('BOSS', []);
+                            const history = chatHistory.get('BOSS');
+                            history.push({ role: 'user', parts: [{ text: text }] });
+                            if (history.length > 10) history.shift();
+                            
+                            const aiReply = await aiService.generateChatResponse(bossPrompt, history);
+                            history.push({ role: 'model', parts: [{ text: aiReply }] });
+                            
+                            await metaService.sendMessage(metaService.privatePageId, bossPrivatePsid, aiReply);
                         }
                     }
                 }
