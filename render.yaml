@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: ai-assistant
+    env: node
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: PORT
+        value: "3000"
+      - key: VERIFY_TOKEN
+        sync: false
+      - key: PAGE_ACCESS_TOKEN_MAIN
+        sync: false
+      - key: PAGE_ACCESS_TOKEN_PRIVATE
+        sync: false
+      - key: GOOGLE_SHEET_ID
+        sync: false
+      - key: GEMINI_API_KEY_1
+        sync: false
+      - key: GEMINI_API_KEY_2
+        sync: false
+      - key: GEMINI_API_KEY_3
+        sync: false
+      - key: GEMINI_API_KEY_4
+        sync: false
+      - key: GEMINI_API_KEY_5
+        sync: false
+      - key: GOOGLE_CREDENTIALS
+        sync: false
