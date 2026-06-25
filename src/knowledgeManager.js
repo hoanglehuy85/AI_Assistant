@@ -1,28 +1,46 @@
 const googleService = require('./googleService');
 
 class KnowledgeManager {
+    /**
+     * Lưu câu hỏi-trả lời mới vào Google Sheets (Bot tự học)
+     */
     async learn(question, answer) {
         await googleService.addFAQ(question, answer);
-        console.log(`[Hệ thống tự học] Đã đẩy lên Google Sheets: Q: "${question}" -> A: "${answer}"`);
+        console.log(`[KB] Đã học: Q: "${question}" → A: "${answer}"`);
     }
 
-    async getKnowledgeContext() {
+    /**
+     * Lấy danh sách FAQ có cấu trúc (cho AI classify)
+     * @returns {Array<{index: number, question: string, answer: string}>}
+     */
+    async getFAQList() {
         const rows = await googleService.readFAQ();
-        if (rows.length === 0) return "";
-        
-        let context = "\n\n=== DỮ LIỆU ĐÃ HỌC TỪ SẾP ===\nDưới đây là các câu trả lời trước đó của Sếp cho những câu hỏi khó. Nếu khách hỏi câu tương tự, hãy tự tin trả lời dựa theo thông tin này mà KHÔNG CẦN CHUYỂN CHO SẾP (không trả lời ESCALATE_TO_BOSS):\n";
-        
-        for (let i = 1; i < rows.length; i++) { // Bỏ qua header nếu có
-            if (rows[i] && rows[i].length >= 2) {
-                context += `Q: ${rows[i][0]}\nA: ${rows[i][1]}\n---\n`;
+        if (rows.length === 0) return [];
+
+        const list = [];
+        for (let i = 0; i < rows.length; i++) {
+            if (rows[i] && rows[i].length >= 2 && rows[i][0] && rows[i][1]) {
+                // Bỏ qua header nếu có
+                if (i === 0 && rows[i][0].toLowerCase().includes('question')) continue;
+                list.push({
+                    index: list.length + 1,
+                    question: rows[i][0],
+                    answer: rows[i][1]
+                });
             }
         }
-        
-        // Handle case where row[0] is data directly
-        if (rows.length > 0 && rows[0][0] && !rows[0][0].toLowerCase().includes("question")) {
-             context += `Q: ${rows[0][0]}\nA: ${rows[0][1]}\n---\n`;
-        }
-        return context;
+        return list;
+    }
+
+    /**
+     * Lấy câu trả lời theo index FAQ
+     * @param {number} faqIndex - Số thứ tự FAQ (1-based)
+     * @param {Array} faqList - Danh sách FAQ đã load
+     * @returns {string|null}
+     */
+    getAnswerByIndex(faqIndex, faqList) {
+        const item = faqList.find(f => f.index === faqIndex);
+        return item ? item.answer : null;
     }
 }
 

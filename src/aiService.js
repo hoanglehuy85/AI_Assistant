@@ -1,7 +1,5 @@
-const { GoogleGenAI } = require('@google/genai');
 const axios = require('axios');
 const apiKeyManager = require('./apiKeyManager');
-const googleService = require('./googleService');
 
 class GroqKeyManager {
     constructor() {
@@ -29,133 +27,98 @@ class GroqKeyManager {
 
 class AiService {
     constructor() {
-        this.ai = null;
         this.groqKeys = new GroqKeyManager();
-        this.initClient();
     }
 
-    initClient() {
-        const key = apiKeyManager.getCurrentKey();
-        if (key) {
-            this.ai = new GoogleGenAI({ apiKey: key });
-            console.log("AI Client initialized with current key.");
+    /**
+     * Phân loại ý định khách hàng. AI CHỈ trả về JSON, KHÔNG tự viết văn.
+     * @param {string} userMessage - Tin nhắn (đã gộp) của khách
+     * @param {Array} faqList - Mảng [{index, question, answer}]
+     * @returns {Object} - {intent: "FAQ_MATCH"|"GREETING"|"NO_MATCH", faq_index?: number}
+     */
+    async classifyIntent(userMessage, faqList) {
+        // Xây dựng danh sách FAQ cho AI đọc
+        let faqText = '';
+        if (faqList.length > 0) {
+            faqText = '\n\nDANH SÁCH FAQ:\n';
+            for (const faq of faqList) {
+                faqText += `[${faq.index}] Q: ${faq.question}\n`;
+            }
         }
+
+        const systemPrompt = `Bạn là bộ phân loại ý định (intent classifier). Nhiệm vụ DUY NHẤT của bạn là đọc tin nhắn khách hàng và phân loại nó.
+
+BẠN PHẢI TRẢ VỀ ĐÚNG 1 DÒNG JSON. KHÔNG ĐƯỢC VIẾT GÌ THÊM. KHÔNG GIẢI THÍCH.
+
+Các loại intent:
+1. {"intent":"GREETING"} - Khách chào hỏi, xã giao (xin chào, hi, hello, chào bạn, ...)
+2. {"intent":"FAQ_MATCH","faq_index":<số>} - Câu hỏi của khách GIỐNG hoặc TƯƠNG TỰ với một câu trong danh sách FAQ bên dưới. Chỉ match khi BẠN CHẮC CHẮN nội dung khách hỏi đúng là câu đó.
+3. {"intent":"NO_MATCH"} - Không match với FAQ nào. LUÔN chọn NO_MATCH nếu không chắc chắn.
+
+QUY TẮC TUYỆT ĐỐI:
+- Chỉ trả về 1 dòng JSON duy nhất.
+- KHÔNG BAO GIỜ tự viết câu trả lời.
+- KHÔNG BAO GIỜ thêm giải thích, lời chào, hay bất kỳ text nào khác.
+- Nếu không chắc chắn → {"intent":"NO_MATCH"}
+${faqText}`;
+
+        const result = await this._callGroq(systemPrompt, userMessage);
+        if (!result) {
+            // Fallback: nếu cả Groq lẫn tất cả đều chết
+            return { intent: 'ERROR' };
+        }
+
+        // Parse JSON từ response
+        try {
+            // Tìm JSON trong response (đề phòng AI thêm text thừa)
+            const jsonMatch = result.match(/\{[^}]+\}/);
+            if (jsonMatch) {
+                const parsed = JSON.parse(jsonMatch[0]);
+                // Validate
+                if (['GREETING', 'FAQ_MATCH', 'NO_MATCH'].includes(parsed.intent)) {
+                    console.log(`[AI Classify] Intent: ${JSON.stringify(parsed)}`);
+                    return parsed;
+                }
+            }
+        } catch (e) {
+            console.error('[AI Classify] Không parse được JSON:', result);
+        }
+
+        // Nếu AI trả rác → mặc định NO_MATCH (an toàn nhất)
+        console.log('[AI Classify] Fallback → NO_MATCH');
+        return { intent: 'NO_MATCH' };
     }
 
-    // ======= GROQ / LLAMA 3.3 (BỘ NÃO CHÍNH) =======
-    async callGroq(systemPrompt, messages, withTools = false) {
-        const groqKey = this.groqKeys.getCurrentKey();
-        if (!groqKey) return null;
-
-        // Chuyển đổi format messages từ Gemini sang OpenAI
-        const groqMessages = [{ role: 'system', content: systemPrompt }];
-        for (const msg of messages) {
-            const role = msg.role === 'model' ? 'assistant' : 'user';
-            const text = msg.parts?.[0]?.text || '';
-            if (text) groqMessages.push({ role, content: text });
-        }
-
-        // Định nghĩa tools cho Calendar (Groq cũng hỗ trợ Function Calling)
-        const tools = withTools ? [{
-            type: "function",
-            function: {
-                name: "checkAvailability",
-                description: "Kiểm tra lịch rảnh của Sếp trong một khoảng thời gian trên Google Calendar.",
-                parameters: {
-                    type: "object",
-                    properties: {
-                        timeMin: { type: "string", description: "Thời gian bắt đầu (ISO 8601, VD: 2026-06-25T08:00:00+07:00)" },
-                        timeMax: { type: "string", description: "Thời gian kết thúc (ISO 8601, VD: 2026-06-25T17:00:00+07:00)" }
-                    },
-                    required: ["timeMin", "timeMax"]
-                }
-            }
-        }, {
-            type: "function",
-            function: {
-                name: "bookAppointment",
-                description: "Đặt lịch hẹn mới trên Google Calendar.",
-                parameters: {
-                    type: "object",
-                    properties: {
-                        summary: { type: "string", description: "Tiêu đề cuộc hẹn (VD: Hẹn tư vấn khách hàng Nguyễn Văn A)" },
-                        startTime: { type: "string", description: "Thời gian bắt đầu (ISO 8601)" },
-                        endTime: { type: "string", description: "Thời gian kết thúc (ISO 8601)" }
-                    },
-                    required: ["summary", "startTime", "endTime"]
-                }
-            }
-        }] : undefined;
-
-        // Thử tất cả Groq keys
+    /**
+     * Gọi Groq API (chỉ dùng Groq, không cần Gemini vì chỉ classify)
+     */
+    async _callGroq(systemPrompt, userMessage) {
         for (let attempt = 0; attempt < this.groqKeys.keys.length; attempt++) {
             try {
                 const currentKey = this.groqKeys.getCurrentKey();
-                console.log(`[Groq] Đang gọi Llama 3.3 (key #${this.groqKeys.currentIndex + 1})...`);
+                console.log(`[Groq] Classify (key #${this.groqKeys.currentIndex + 1})...`);
 
-                const requestBody = {
+                const response = await axios.post('https://api.groq.com/openai/v1/chat/completions', {
                     model: 'llama-3.3-70b-versatile',
-                    messages: groqMessages,
-                    temperature: 0.7,
-                    max_tokens: 1024
-                };
-                if (tools) requestBody.tools = tools;
-
-                const response = await axios.post('https://api.groq.com/openai/v1/chat/completions', requestBody, {
+                    messages: [
+                        { role: 'system', content: systemPrompt },
+                        { role: 'user', content: userMessage }
+                    ],
+                    temperature: 0.1,  // Rất thấp → ít sáng tạo, ít bịa
+                    max_tokens: 50     // Chỉ cần 1 dòng JSON ngắn
+                }, {
                     headers: {
                         'Authorization': `Bearer ${currentKey}`,
                         'Content-Type': 'application/json'
                     },
-                    timeout: 15000
+                    timeout: 10000
                 });
 
-                const choice = response.data.choices[0];
-
-                // Xử lý Function Calling (Calendar)
-                if (choice.message.tool_calls && choice.message.tool_calls.length > 0) {
-                    const toolCall = choice.message.tool_calls[0];
-                    const funcName = toolCall.function.name;
-                    const funcArgs = JSON.parse(toolCall.function.arguments);
-                    console.log(`[Groq Tool] Gọi hàm ${funcName}(${JSON.stringify(funcArgs)})`);
-
-                    let funcResult = "";
-                    if (funcName === "checkAvailability") {
-                        funcResult = await googleService.checkAvailability(funcArgs.timeMin, funcArgs.timeMax);
-                    } else if (funcName === "bookAppointment") {
-                        funcResult = await googleService.bookAppointment(funcArgs.summary, funcArgs.startTime, funcArgs.endTime);
-                    }
-
-                    // Gửi kết quả function trở lại cho AI
-                    groqMessages.push(choice.message);
-                    groqMessages.push({
-                        role: "tool",
-                        tool_call_id: toolCall.id,
-                        content: funcResult
-                    });
-
-                    const finalResponse = await axios.post('https://api.groq.com/openai/v1/chat/completions', {
-                        model: 'llama-3.3-70b-versatile',
-                        messages: groqMessages,
-                        temperature: 0.7,
-                        max_tokens: 1024
-                    }, {
-                        headers: {
-                            'Authorization': `Bearer ${currentKey}`,
-                            'Content-Type': 'application/json'
-                        },
-                        timeout: 15000
-                    });
-
-                    console.log("[Groq] Trả lời thành công (có Calendar).");
-                    return finalResponse.data.choices[0].message.content;
-                }
-
-                console.log("[Groq] Trả lời thành công.");
-                return choice.message.content;
+                return response.data.choices[0].message.content.trim();
 
             } catch (error) {
                 const status = error.response?.status || '';
-                console.error(`[Groq] Lỗi key#${this.groqKeys.currentIndex + 1}: ${status} ${error.response?.data?.error?.message || error.message}`);
+                console.error(`[Groq] Lỗi key#${this.groqKeys.currentIndex + 1}: ${status}`);
 
                 if (status === 429 || status === 503) {
                     this.groqKeys.rotateKey();
@@ -165,110 +128,6 @@ class AiService {
             }
         }
         return null;
-    }
-
-    // ======= GEMINI (BỘ NÃO DỰ PHÒNG) =======
-    async callGemini(systemPrompt, contents) {
-        if (!this.ai) this.initClient();
-        if (!this.ai) return null;
-
-        const tools = [{
-            functionDeclarations: [
-                {
-                    name: "checkAvailability",
-                    description: "Kiểm tra lịch rảnh của Sếp trên Google Calendar.",
-                    parameters: {
-                        type: "OBJECT",
-                        properties: {
-                            timeMin: { type: "STRING", description: "Thời gian bắt đầu (ISO 8601)" },
-                            timeMax: { type: "STRING", description: "Thời gian kết thúc (ISO 8601)" }
-                        },
-                        required: ["timeMin", "timeMax"]
-                    }
-                },
-                {
-                    name: "bookAppointment",
-                    description: "Đặt lịch hẹn mới trên Google Calendar.",
-                    parameters: {
-                        type: "OBJECT",
-                        properties: {
-                            summary: { type: "STRING", description: "Tiêu đề cuộc hẹn" },
-                            startTime: { type: "STRING", description: "Thời gian bắt đầu (ISO 8601)" },
-                            endTime: { type: "STRING", description: "Thời gian kết thúc (ISO 8601)" }
-                        },
-                        required: ["summary", "startTime", "endTime"]
-                    }
-                }
-            ]
-        }];
-
-        for (let attempt = 0; attempt < apiKeyManager.keys.length; attempt++) {
-            try {
-                console.log(`[Gemini] Đang gọi gemini-2.5-flash (key #${apiKeyManager.currentIndex + 1})...`);
-                const response = await this.ai.models.generateContent({
-                    model: 'gemini-2.5-flash',
-                    contents: contents,
-                    config: { systemInstruction: systemPrompt, temperature: 0.7, tools: tools }
-                });
-
-                if (response.functionCalls && response.functionCalls.length > 0) {
-                    const call = response.functionCalls[0];
-                    console.log(`[Gemini Tool] Gọi hàm ${call.name}(${JSON.stringify(call.args)})`);
-
-                    let funcResult = "";
-                    if (call.name === "checkAvailability") {
-                        funcResult = await googleService.checkAvailability(call.args.timeMin, call.args.timeMax);
-                    } else if (call.name === "bookAppointment") {
-                        funcResult = await googleService.bookAppointment(call.args.summary, call.args.startTime, call.args.endTime);
-                    }
-
-                    const newContents = [
-                        ...contents,
-                        { role: 'model', parts: [{ functionCall: call }] },
-                        { role: 'user', parts: [{ functionResponse: { name: call.name, response: { result: funcResult } } }] }
-                    ];
-
-                    const finalResponse = await this.ai.models.generateContent({
-                        model: 'gemini-2.5-flash',
-                        contents: newContents,
-                        config: { systemInstruction: systemPrompt, temperature: 0.7, tools: tools }
-                    });
-                    console.log("[Gemini] Trả lời thành công.");
-                    return finalResponse.text;
-                }
-
-                console.log("[Gemini] Trả lời thành công.");
-                return response.text;
-
-            } catch (error) {
-                console.error(`[Gemini] Lỗi key#${apiKeyManager.currentIndex + 1}:`, error.status || '', error.message.substring(0, 80));
-                apiKeyManager.rotateKey();
-                this.initClient();
-            }
-        }
-        return null;
-    }
-
-    // ======= ĐIỂM VÀO CHÍNH =======
-    async generateResponse(systemPrompt, userMessage) {
-        return this.generateChatResponse(systemPrompt, [
-            { role: 'user', parts: [{ text: userMessage }] }
-        ]);
-    }
-
-    async generateChatResponse(systemPrompt, contents) {
-        // Bước 1: Groq/Llama 3.3 (BỘ NÃO CHÍNH - quota khổng lồ, có Calendar)
-        const groqResult = await this.callGroq(systemPrompt, contents, true);
-        if (groqResult) return groqResult;
-
-        // Bước 2: Gemini (DỰ PHÒNG - khi Groq chết)
-        console.log("[AI] Groq không khả dụng. Chuyển sang Gemini...");
-        const geminiResult = await this.callGemini(systemPrompt, contents);
-        if (geminiResult) return geminiResult;
-
-        // Bước 3: Cả 2 đều chết
-        console.error("[AI] TẤT CẢ AI ĐỀU KHÔNG KHẢ DỤNG!");
-        return "Xin lỗi, hệ thống AI tạm thời đang bảo trì. Sếp sẽ liên hệ lại với bạn sớm nhất ạ.";
     }
 }
 

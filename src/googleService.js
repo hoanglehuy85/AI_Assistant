@@ -149,19 +149,24 @@ class GoogleService {
             });
             const events = res.data.items;
             if (events.length === 0) {
-                return "Không có lịch trình nào. Khung giờ này Sếp rảnh rỗi.";
+                return "Không có lịch trình nào. Khung giờ này rảnh.";
             } else {
-                let report = "Sếp đang bận vào các lịch sau:\n";
+                let report = "Lịch trình:\n";
                 events.forEach(event => {
                     const start = event.start.dateTime || event.start.date;
                     const end = event.end.dateTime || event.end.date;
-                    report += `- ${event.summary} (Từ ${start} đến ${end})\n`;
+                    report += `- ${event.summary} (${start} → ${end})\n`;
                 });
                 return report;
             }
         } catch (error) {
-            console.error("[Google] Lỗi kiểm tra lịch:", error.message);
-            return "Đã xảy ra lỗi khi truy cập lịch.";
+            const code = error.code || error.response?.status;
+            if (code === 403 || code === 404) {
+                console.error("[Google Calendar] LỖI QUYỀN: Service Account chưa được share quyền vào Calendar!");
+                return "LỖI: Calendar chưa được chia sẻ quyền cho Bot. Sếp cần share lịch cho chatbot@huyhoangnlp.iam.gserviceaccount.com";
+            }
+            console.error("[Google Calendar] Lỗi:", error.message);
+            return "Lỗi khi truy cập lịch. Vui lòng thử lại.";
         }
     }
 
@@ -169,17 +174,22 @@ class GoogleService {
         try {
             const event = {
                 summary: summary,
-                start: { dateTime: startTime },
-                end: { dateTime: endTime },
+                start: { dateTime: startTime, timeZone: 'Asia/Ho_Chi_Minh' },
+                end: { dateTime: endTime, timeZone: 'Asia/Ho_Chi_Minh' },
             };
             const res = await this.calendar.events.insert({
                 calendarId: 'huyhoangnlp@gmail.com',
                 resource: event,
             });
-            return `Đã đặt lịch thành công! Sự kiện: ${summary} (Link: ${res.data.htmlLink})`;
+            return `Đã đặt lịch: ${summary} (${res.data.htmlLink})`;
         } catch (error) {
-            console.error("[Google] Lỗi tạo lịch hẹn:", error.message);
-            return "Đã xảy ra lỗi khi tạo lịch hẹn.";
+            const code = error.code || error.response?.status;
+            if (code === 403 || code === 404) {
+                console.error("[Google Calendar] LỖI QUYỀN khi đặt lịch!");
+                return "LỖI: Calendar chưa được chia sẻ quyền cho Bot.";
+            }
+            console.error("[Google Calendar] Lỗi đặt lịch:", error.message);
+            return "Lỗi khi tạo lịch hẹn. Vui lòng thử lại.";
         }
     }
 }
