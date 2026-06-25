@@ -14,6 +14,7 @@ const PORT = process.env.PORT || 3000;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
 
 let bossPrivatePsid = null;
+let bossChatHistory = [];   // Chat history riêng cho Sếp trên Trang Kín
 const customerDebouncer = new MessageDebouncer(3000);  // Gộp tin khách (3 giây)
 const bossDebouncer = new MessageDebouncer(3000);      // Gộp tin Sếp (3 giây)
 
@@ -192,52 +193,27 @@ async function handleBossMessage(senderPsid, text) {
         return;
     }
 
-    // ===== SẾP ĐANG RẢNH (IDLE) → XỬ LÝ LỆNH =====
-    const lowerText = combined.trim().toLowerCase();
+    // ===== SẾP ĐANG RẢNH (IDLE) → TRỢ LÝ THÔNG MINH =====
+    // AI có quyền trả lời tự nhiên VỚI SẾP (Sếp kiểm soát được)
+    // Calendar luôn lấy dữ liệu thật qua Function Calling (không bịa)
+    if (!bossChatHistory) bossChatHistory = [];
+    
+    const aiReply = await aiService.generateBossResponse(
+        combined,
+        bossChatHistory,
+        googleService,
+        escalationManager
+    );
 
-    // Lệnh xem lịch
-    if (lowerText.includes('lịch hôm nay') || lowerText.includes('lich hom nay')) {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const tomorrow = new Date(today);
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        const result = await googleService.checkAvailability(today.toISOString(), tomorrow.toISOString());
-        await metaService.sendMessage(metaService.privatePageId, bossPrivatePsid, `📅 Lịch hôm nay:\n${result}`);
-        return;
+    // Lưu chat history cho Sếp
+    bossChatHistory.push({ role: 'user', content: combined });
+    bossChatHistory.push({ role: 'assistant', content: aiReply });
+    // Giữ tối đa 20 tin nhắn history
+    if (bossChatHistory.length > 20) {
+        bossChatHistory = bossChatHistory.slice(-20);
     }
 
-    if (lowerText.includes('lịch ngày mai') || lowerText.includes('lich ngay mai')) {
-        const tomorrow = new Date();
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        tomorrow.setHours(0, 0, 0, 0);
-        const dayAfter = new Date(tomorrow);
-        dayAfter.setDate(dayAfter.getDate() + 1);
-        const result = await googleService.checkAvailability(tomorrow.toISOString(), dayAfter.toISOString());
-        await metaService.sendMessage(metaService.privatePageId, bossPrivatePsid, `📅 Lịch ngày mai:\n${result}`);
-        return;
-    }
-
-    if (lowerText.includes('lịch tuần này') || lowerText.includes('lich tuan nay')) {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const endOfWeek = new Date(today);
-        endOfWeek.setDate(endOfWeek.getDate() + (7 - today.getDay()));
-        const result = await googleService.checkAvailability(today.toISOString(), endOfWeek.toISOString());
-        await metaService.sendMessage(metaService.privatePageId, bossPrivatePsid, `📅 Lịch tuần này:\n${result}`);
-        return;
-    }
-
-    // Lệnh xem hàng đợi
-    if (lowerText.includes('hàng đợi') || lowerText.includes('hang doi') || lowerText.includes('queue')) {
-        const qLen = escalationManager.getQueueLength();
-        await metaService.sendMessage(metaService.privatePageId, bossPrivatePsid,
-            qLen > 0 ? `Đang có ${qLen} câu hỏi chờ Sếp trả lời.` : 'Không có câu hỏi nào đang chờ ạ.'
-        );
-        return;
-    }
-
-    // Không nhận ra lệnh → Hiển thị menu
-    await metaService.sendMessage(metaService.privatePageId, bossPrivatePsid, TEMPLATES.BOSS_IDLE_HELP);
+    await metaService.sendMessage(metaService.privatePageId, bossPrivatePsid, aiReply);
 }
 
 // ===== KHỞI ĐỘNG =====
